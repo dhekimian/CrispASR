@@ -64,12 +64,12 @@ jobs:
       SDK_INDEX: ${{ inputs.sdk_index || '' }}
       TORCH_INDEX_MAP: ${{ vars.TORCH_INDEX_MAP }}
     steps:
-      # A cancelled job can leave the container's root-owned build tree behind,
-      # and checkout cannot clean it. Remove it as root first.
-      - name: Remove a previous job's build tree
+      # A cancelled job can leave root-owned files from the container in a reused
+      # workspace, and checkout cannot clean them. Hand them back first.
+      - name: Reclaim a previous job's files
         run: |
-          if [ -e build ] || [ -e out ]; then
-            docker run --rm -v "$PWD:/w" ubuntu:24.04 rm -rf /w/build /w/out
+          if [ -n "$(find . -mindepth 1 ! -user "$(id -u)" -print -quit 2>/dev/null)" ]; then
+            docker run --rm -v "$PWD:/w" ubuntu:24.04 chown -R "$(id -u):$(id -g)" /w
           fi
 
       - uses: actions/checkout@v4
@@ -92,7 +92,7 @@ jobs:
           # The script never fails on a test failure; "Judge results" decides.
           # Host GIDs, not names: plain ubuntu and some ROCm images have no render group.
           docker run --rm --network host --device=/dev/kfd --device=/dev/dri \
-            --group-add "$(getent group video | cut -d: -f3)" --group-add "$(getent group render | cut -d: -f3)" --security-opt seccomp=unconfined -e ROCM_SDK_INDEX \
+            --group-add "$(getent group video | cut -d: -f3)" --group-add "$(getent group render | cut -d: -f3)" --security-opt seccomp=unconfined -e ROCM_SDK_INDEX -e PYTHONDONTWRITEBYTECODE=1 \
             -v "$PWD:/work/CrispASR" -w /work/CrispASR "$IMAGE" bash -c '
               bash .github/devlab-rocm-test.sh ${{ matrix.gfx }}
               chown -R "$(stat -c %u:%g .)" .
