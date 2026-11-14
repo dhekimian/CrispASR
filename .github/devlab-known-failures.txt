@@ -1,0 +1,4 @@
+# Known upstream failures: <ctest name or check name glob> | <reason> | <upstream link, or "not filed">
+# A failure listed here shows as a warning; anything else fails the job.
+# Checks (from devlab-rocm-test.sh): build, transcribe-gpu-backend, transcribe-text,
+# transcribe-download, setup. Only list a failure once it is classified as upstream.

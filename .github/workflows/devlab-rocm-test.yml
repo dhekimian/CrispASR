@@ -1,0 +1,177 @@
+# Run CrispASR's HIP backend on consumer AMD GPUs.
+#
+# release.yml builds HIP tarballs for gfx906..gfx1201 but nothing runs them:
+# the gfx1100 proof job has never had a runner, and gfx1151 is not built at
+# all. This builds the HIP backend for a Radeon 8060S (Strix Halo, gfx1151)
+# and a Radeon AI PRO R9700 (gfx1201) in the stock ROCm container, runs the
+# weight-free unit tier (as ci.yml's linux-unit job does), then transcribes
+# samples/jfk.wav with whisper tiny.en and checks the log shows the ROCm
+# device was used, not a silent CPU fallback.
+#
+# Every run uploads summary-*.json (which checks passed) so results compare
+# across ROCm versions; other workflows call this one for a version matrix.
+# Failures listed in .github/devlab-known-failures.txt show as warnings.
+#
+# Runners: AMD DevLab, a donated pool of ephemeral, single-use machines. One
+# job per machine; nothing persists between jobs.
+name: ROCm test (gfx1151, gfx1201)
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      image:
+        description: ROCm container to build and test in
+        default: rocm/dev-ubuntu-24.04:7.2.4-complete
+  workflow_call:
+    inputs:
+      image: {type: string, default: rocm/dev-ubuntu-24.04:7.2.4-complete}
+      label: {type: string, default: release}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rocm-test-${{ github.ref }}-${{ inputs.label || 'release' }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.gpu }} (${{ matrix.gfx }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - gpu: strix-halo
+            gfx: gfx1151
+          - gpu: radeon-r9700
+            gfx: gfx1201
+    runs-on: [self-hosted, Linux, devlab-dispatch, "${{ matrix.gpu }}"]
+    timeout-minutes: 120
+    env:
+      IMAGE: ${{ inputs.image || 'rocm/dev-ubuntu-24.04:7.2.4-complete' }}
+      LABEL: ${{ inputs.label || 'release' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Build and test in ${{ env.IMAGE }}
+        run: |
+          set -euo pipefail
+          docker pull -q "$IMAGE"
+          # The script never fails on a test failure; "Judge results" decides.
+          docker run --rm --network host --device=/dev/kfd --device=/dev/dri \
+            --group-add video --group-add render --security-opt seccomp=unconfined \
+            -v "$PWD:/work/CrispASR" -w /work/CrispASR "$IMAGE" bash -c '
+              bash .github/devlab-rocm-test.sh ${{ matrix.gfx }}
+              chown -R "$(stat -c %u:%g .)" .
+            '
+          cat out/results.txt
+
+      - name: Judge results
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import fnmatch, json, os, xml.etree.ElementTree as ET
+          def read(p):
+              try:
+                  return open(p).read().strip()
+              except Exception:
+                  return None
+          known = []
+          for line in open(".github/devlab-known-failures.txt"):
+              line = line.strip()
+              if line and not line.startswith("#"):
+                  pat, reason, issue = [f.strip() for f in line.split("|", 2)]
+                  known.append((pat, reason, issue))
+          def match(name):
+              return next((k for k in known if fnmatch.fnmatchcase(name, k[0])), None)
+          checks = dict(l.split("=", 1) for l in (read("out/results.txt") or "").splitlines() if "=" in l)
+          failed = [k for k, v in checks.items() if v != "pass"]
+          blocked = []
+          rc = read("out/ctest.rc")
+          if checks.get("build") != "pass":
+              blocked.append("build did not complete" if checks.get("build") else "setup did not complete")
+          elif rc not in ("0", "8") or not os.path.exists("out/ctest.xml"):
+              blocked.append(f"unit tier did not run (ctest rc={rc})")
+          else:
+              for tc in ET.parse("out/ctest.xml").getroot().iter("testcase"):
+                  if tc.find("failure") is not None or tc.find("error") is not None or tc.get("status") == "fail":
+                      failed.append(tc.get("name"))
+          kf = [n for n in failed if match(n)]
+          nf = blocked + [n for n in failed if not match(n)]
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as out:
+              for n in kf:
+                  pat, reason, issue = match(n)
+                  print(f"::warning title=Known upstream failure::{n} — {reason} ({issue})")
+                  out.write(f"- known upstream failure: `{n}` — {reason} ({issue})\n")
+              for n in nf:
+                  print(f"::error::new failure: {n}")
+                  out.write(f"- NEW failure: `{n}`\n")
+          verdict = "fail" if nf else "known-failures" if kf else "pass"
+          json.dump({"verdict": verdict, "known_failures": kf, "new_failures": nf}, open("judge.json", "w"))
+          print("verdict:", verdict)
+          raise SystemExit(verdict == "fail")
+          PY
+
+      - name: Write the run summary
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json, os, datetime, xml.etree.ElementTree as ET
+          def read(p):
+              try:
+                  return open(p).read().strip()
+              except Exception:
+                  return None
+          checks = dict(l.split("=", 1) for l in (read("out/results.txt") or "").splitlines() if "=" in l)
+          tests = None
+          if os.path.exists("out/ctest.xml"):
+              s = ET.parse("out/ctest.xml").getroot()
+              s = s if s.tag == "testsuite" else s.find("testsuite")
+              n = {k: int(s.get(k, 0)) for k in ("tests", "failures", "errors", "skipped")}
+              tests = {"ran": n["tests"], "failed": n["failures"], "errors": n["errors"],
+                       "skipped": n["skipped"],
+                       "passed": n["tests"] - n["failures"] - n["errors"] - n["skipped"],
+                       "seconds": round(float(s.get("time", 0)), 1)}
+          try:
+              judge = json.load(open("judge.json"))
+          except Exception:
+              judge = {"verdict": "fail", "known_failures": [], "new_failures": ["judge step did not run"]}
+          summary = {
+              "schema": 1, "project": "crispasr", "label": os.environ["LABEL"],
+              "release": "${{ github.sha }}"[:12], "combo": os.environ["IMAGE"],
+              "gpu": "${{ matrix.gpu }}", "gfx": "${{ matrix.gfx }}",
+              "env": {"arch": read("out/arch.txt"), "hip": read("out/hip.txt"), "image": os.environ["IMAGE"]},
+              "smoke": {"transcribe-gpu-backend": checks.get("transcribe-gpu-backend"),
+                        "transcribe-text": checks.get("transcribe-text")},
+              "checks": checks, "tests": tests, "job_status": "${{ job.status }}",
+              "verdict": judge["verdict"], "known_failures": judge["known_failures"],
+              "new_failures": judge["new_failures"],
+              "run": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+              "finished": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+          }
+          json.dump(summary, open("summary.json", "w"), indent=1)
+          print(json.dumps(summary, indent=1))
+          PY
+
+      - name: Upload the logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: devlab-logs-${{ inputs.label || 'release' }}-${{ matrix.gpu }}-${{ github.run_attempt }}
+          path: |
+            out/*.log
+            out/*.txt
+            out/ctest.xml
+          retention-days: 30
+
+      - name: Upload the run summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: devlab-summary-${{ inputs.label || 'release' }}-${{ matrix.gpu }}-${{ github.run_attempt }}
+          path: summary.json
+          retention-days: 90
