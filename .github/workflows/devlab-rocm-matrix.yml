@@ -1,5 +1,9 @@
 # DevLab support matrix for CrispASR: the HIP backend on each ROCm line, on
 # Strix Halo and the R9700. Weekly, in the DevLab fork only.
+#
+# rocm-next is the ROCm release candidate. It has no container image or apt
+# repo, so that leg installs the SDK from AMD's pip index (rocm[libraries,devel]
+# plus the device package for the job's gfx) in plain Ubuntu 24.04.
 name: DevLab support matrix
 
 on:
@@ -17,9 +21,13 @@ jobs:
       max-parallel: 2
       matrix:
         include:
+          - {name: rocm-next, image: "ubuntu:24.04", sdk_index: "https://rc.repo.amd.com/rocm/whl-next/"}
+          - {name: rocm10.1, image: "rocm/dev-ubuntu-24.04:10.1.0-full"}
           - {name: rocm10.0, image: "rocm/dev-ubuntu-24.04:10.0.0-full"}
+          - {name: rocm7.14, image: "rocm/dev-ubuntu-24.04:7.14.1-full"}
           - {name: rocm7.2, image: "rocm/dev-ubuntu-24.04:7.2.4-complete"}
     uses: ./.github/workflows/devlab-rocm-test.yml
     with:
       image: ${{ matrix.image }}
       label: ${{ matrix.name }}
+      sdk_index: ${{ matrix.sdk_index || '' }}

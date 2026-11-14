@@ -28,6 +28,9 @@ on:
     inputs:
       image: {type: string, default: rocm/dev-ubuntu-24.04:7.2.4-complete}
       label: {type: string, default: release}
+      # Install the ROCm SDK from this pip index instead of using the image's
+      # /opt/rocm (rocm-next, which has no image or apt repo).
+      sdk_index: {type: string, default: ""}
 
 permissions:
   contents: read
@@ -52,6 +55,8 @@ jobs:
     env:
       IMAGE: ${{ inputs.image || 'rocm/dev-ubuntu-24.04:7.2.4-complete' }}
       LABEL: ${{ inputs.label || 'release' }}
+      SDK_INDEX: ${{ inputs.sdk_index || '' }}
+      TORCH_INDEX_MAP: ${{ vars.TORCH_INDEX_MAP }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -61,9 +66,18 @@ jobs:
         run: |
           set -euo pipefail
           docker pull -q "$IMAGE"
+          # A runner pool with a package mirror maps public indexes to it with the
+          # TORCH_INDEX_MAP repository variable (JSON: index URL -> mirror URL, or
+          # [index, extra index, ...]). Unset, the index is used as given.
+          ROCM_SDK_INDEX="$SDK_INDEX"
+          if [ -n "$SDK_INDEX" ] && [ -n "${TORCH_INDEX_MAP:-}" ]; then
+            ROCM_SDK_INDEX=$(python3 -c 'import json,sys; m=json.loads(sys.argv[1]); u=sys.argv[2]; v=m.get(u.rstrip("/")+"/", m.get(u.rstrip("/"), u)); print(" ".join([v] if isinstance(v, str) else v))' "$TORCH_INDEX_MAP" "$SDK_INDEX")
+          fi
+          export ROCM_SDK_INDEX
+          [ -z "$ROCM_SDK_INDEX" ] || echo "ROCm SDK from pip: $ROCM_SDK_INDEX"
           # The script never fails on a test failure; "Judge results" decides.
           docker run --rm --network host --device=/dev/kfd --device=/dev/dri \
-            --group-add video --group-add render --security-opt seccomp=unconfined \
+            --group-add video --group-add render --security-opt seccomp=unconfined -e ROCM_SDK_INDEX \
             -v "$PWD:/work/CrispASR" -w /work/CrispASR "$IMAGE" bash -c '
               bash .github/devlab-rocm-test.sh ${{ matrix.gfx }}
               chown -R "$(stat -c %u:%g .)" .
