@@ -82,8 +82,9 @@ jobs:
           export ROCM_SDK_INDEX
           [ -z "$ROCM_SDK_INDEX" ] || echo "ROCm SDK from pip: $ROCM_SDK_INDEX"
           # The script never fails on a test failure; "Judge results" decides.
+          # Host GIDs, not names: plain ubuntu and some ROCm images have no render group.
           docker run --rm --network host --device=/dev/kfd --device=/dev/dri \
-            --group-add video --group-add render --security-opt seccomp=unconfined -e ROCM_SDK_INDEX \
+            --group-add "$(getent group video | cut -d: -f3)" --group-add "$(getent group render | cut -d: -f3)" --security-opt seccomp=unconfined -e ROCM_SDK_INDEX \
             -v "$PWD:/work/CrispASR" -w /work/CrispASR "$IMAGE" bash -c '
               bash .github/devlab-rocm-test.sh ${{ matrix.gfx }}
               chown -R "$(stat -c %u:%g .)" .
