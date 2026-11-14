@@ -49,6 +49,13 @@ if [ -n "$ROCM_SDK_INDEX" ]; then
   /opt/rocm-sdk/bin/pip list 2>/dev/null | grep -i '^rocm' | tee "$OUT/sdk-version.txt"
 else
   export ROCM_PATH=/opt/rocm PATH="/opt/rocm/bin:$PATH"
+  # The 7.14+ images do not register /opt/rocm/lib with the loader (7.2 does),
+  # and libggml-hip.so's RUNPATH does not name it, so every test binary fails
+  # with "libhipblas.so.3: cannot open shared object file" (catch2 discovery
+  # runs them at build time).
+  if ! ldconfig -p | grep -q 'libhipblas\.so'; then
+    echo "$ROCM_PATH/lib" > /etc/ld.so.conf.d/zz-devlab-rocm.conf && ldconfig
+  fi
 fi
 
 rocminfo > "$OUT/rocminfo.txt" 2>&1 || true
