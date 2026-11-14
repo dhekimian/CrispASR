@@ -23,10 +23,12 @@ git config --global --add safe.directory '*'
 # image's /opt/rocm. For rocm-next, which ships no image or apt repo. Space-
 # separated: the index, then any extra indexes.
 ROCM_SDK_INDEX=${ROCM_SDK_INDEX:-}
+# make: test-portable-cpu-config configures a nested project with the default
+# "Unix Makefiles" generator (plain ubuntu has no make; the ROCm images do).
 apt_rocm="hipblas-dev rocblas-dev"
 [ -n "$ROCM_SDK_INDEX" ] && apt_rocm="python3-venv"
 apt-get update -qq && apt-get install -y -qq --no-install-recommends \
-  cmake ninja-build g++ git curl ca-certificates patchelf \
+  cmake ninja-build make g++ git curl ca-certificates patchelf \
   python3 python3-numpy python3-pytest $apt_rocm >/dev/null \
   || { result setup fail; exit 0; }
 
