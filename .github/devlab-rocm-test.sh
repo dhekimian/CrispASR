@@ -13,11 +13,10 @@ set -uo pipefail
 GFX=${1:?gfx target, e.g. gfx1201}
 SRC=$(pwd)
 OUT=$SRC/out
-mkdir -p "$OUT"
+rm -rf "$OUT"; mkdir -p "$OUT"
 : > "$OUT/results.txt"
 result() { echo "$1=$2" >> "$OUT/results.txt"; }
 export DEBIAN_FRONTEND=noninteractive
-git config --global --add safe.directory '*'
 
 # ROCM_SDK_INDEX (optional): install the ROCm SDK from pip instead of using the
 # image's /opt/rocm. For rocm-next, which ships no image or apt repo. Space-
@@ -25,12 +24,16 @@ git config --global --add safe.directory '*'
 ROCM_SDK_INDEX=${ROCM_SDK_INDEX:-}
 # make: test-portable-cpu-config configures a nested project with the default
 # "Unix Makefiles" generator (plain ubuntu has no make; the ROCm images do).
-apt_rocm="hipblas-dev rocblas-dev"
+# The 7.2 "complete" image lacks the BLAS dev packages (as upstream's release.yml
+# notes); the 7.14+ "full" images ship them and have no hipblas-dev in apt.
+apt_rocm=""
+[ -d /opt/rocm/lib/cmake/hipblas ] || apt_rocm="hipblas-dev rocblas-dev"
 [ -n "$ROCM_SDK_INDEX" ] && apt_rocm="python3-venv"
 apt-get update -qq && apt-get install -y -qq --no-install-recommends \
   cmake ninja-build make g++ git curl ca-certificates patchelf \
-  python3 python3-numpy python3-pytest $apt_rocm >/dev/null \
-  || { result setup fail; exit 0; }
+  python3 python3-numpy python3-pytest $apt_rocm > "$OUT/apt.log" 2>&1 \
+  || { tail -n 20 "$OUT/apt.log"; result setup fail; exit 0; }
+git config --global --add safe.directory '*'
 
 if [ -n "$ROCM_SDK_INDEX" ]; then
   set -- $ROCM_SDK_INDEX

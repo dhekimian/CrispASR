@@ -64,6 +64,14 @@ jobs:
       SDK_INDEX: ${{ inputs.sdk_index || '' }}
       TORCH_INDEX_MAP: ${{ vars.TORCH_INDEX_MAP }}
     steps:
+      # A cancelled job can leave the container's root-owned build tree behind,
+      # and checkout cannot clean it. Remove it as root first.
+      - name: Remove a previous job's build tree
+        run: |
+          if [ -e build ] || [ -e out ]; then
+            docker run --rm -v "$PWD:/w" ubuntu:24.04 rm -rf /w/build /w/out
+          fi
+
       - uses: actions/checkout@v4
         with:
           submodules: recursive
