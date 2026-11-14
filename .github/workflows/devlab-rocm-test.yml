@@ -24,6 +24,12 @@ on:
       image:
         description: ROCm container to build and test in
         default: rocm/dev-ubuntu-24.04:7.2.4-complete
+      sdk_index:
+        description: Install the ROCm SDK from this pip index instead (e.g. https://rc.repo.amd.com/rocm/whl-next/ with image ubuntu:24.04)
+        default: ""
+      label:
+        description: Name for this run's summary artifact
+        default: release
   workflow_call:
     inputs:
       image: {type: string, default: rocm/dev-ubuntu-24.04:7.2.4-complete}
