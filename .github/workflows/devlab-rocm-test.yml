@@ -12,7 +12,7 @@
 # across ROCm versions; other workflows call this one for a version matrix.
 # Failures listed in .github/devlab-known-failures.txt show as warnings.
 #
-# Runners: AMD DevLab, a donated pool of ephemeral, single-use machines. One
+# Runners: AMD DevLab, a donated pool of single-use machines. One
 # job per machine; nothing persists between jobs.
 name: ROCm test (gfx1151, gfx1201)
 
